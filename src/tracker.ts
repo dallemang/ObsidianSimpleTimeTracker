@@ -7,9 +7,12 @@ export interface Tracker {
 
 export interface Entry {
     name: string;
+    namePar: HTMLElement;
+    nameBox: TextComponent ;
     startTime: number;
     endTime: number;
     subEntries: Entry[];
+    editbutton: ButtonComponent;
 }
 
 export async function saveTracker(tracker: Tracker, app: App, section: MarkdownSectionInformation): Promise<void> {
@@ -41,6 +44,8 @@ export function loadTracker(json: string): Tracker {
 
 export function displayTracker(tracker: Tracker, element: HTMLElement, getSectionInfo: () => MarkdownSectionInformation, settings: SimpleTimeTrackerSettings): void {
     // add start/stop controls
+
+
     let running = isRunning(tracker);
     let btn = new ButtonComponent(element)
         .setClass("clickable-icon")
@@ -48,7 +53,14 @@ export function displayTracker(tracker: Tracker, element: HTMLElement, getSectio
         .setTooltip(running ? "End" : "Start")
         .onClick(async () => {
             if (running) {
-                endRunningEntry(tracker);
+		try {
+		    let entry =  getRunningEntry(tracker.entries);
+                    endRunningEntry(tracker);
+		    entry.name=newSegmentNameBox.getValue();
+                    startNewEntry(tracker, "TBD");
+		}
+		catch (error) { alert(error);}
+		
             } else {
                 startNewEntry(tracker, newSegmentNameBox.getValue());
             }
@@ -57,7 +69,7 @@ export function displayTracker(tracker: Tracker, element: HTMLElement, getSectio
     btn.buttonEl.addClass("simple-time-tracker-btn");
     let newSegmentNameBox = new TextComponent(element)
         .setPlaceholder("Segment name")
-        .setDisabled(running);
+        .setDisabled(!running)
     newSegmentNameBox.inputEl.addClass("simple-time-tracker-txt");
 
     // add timers
@@ -67,7 +79,7 @@ export function displayTracker(tracker: Tracker, element: HTMLElement, getSectio
     currentDiv.createEl("span", { text: "Current" });
     let totalDiv = timer.createEl("div", { cls: "simple-time-tracker-timer" });
     let total = totalDiv.createEl("span", { cls: "simple-time-tracker-timer-time", text: "0s" });
-    totalDiv.createEl("span", { text: "Total" });
+    totalDiv.createEl("span", { text: "Today's Total" });
 
     if (tracker.entries.length > 0) {
         // add table
@@ -79,14 +91,39 @@ export function displayTracker(tracker: Tracker, element: HTMLElement, getSectio
             createEl("th", { text: "Duration" }),
             createEl("th"));
 
+	let previous=0;
         for (let entry of tracker.entries)
+	{
+	    if (moment.unix(previous).format("DD")!=moment.unix(entry.startTime).format("DD"))
+	    {
+		let td=table.createEl ("tr") .createEl ("td");
+		td.colSpan=4;
+		td.createEl ("hr");
+
+		td=table.createEl ("tr") .createEl ("td", { text: moment.unix(entry.startTime).format("ddd, MMM DD, YYYY") });
+		td.colSpan=4;
+		td.style.textAlign="center";
+		
+		
+
+		td=table.createEl ("tr") .createEl ("td");
+		td.colSpan=4;
+		td.createEl ("hr");
+	    }	
             addEditableTableRow(tracker, entry, table, newSegmentNameBox, running, getSectionInfo, settings, 0);
+	    previous=entry.endTime;
+	}
+
+
 
         // add copy buttons
         let buttons = element.createEl("div", { cls: "simple-time-tracker-bottom" });
         new ButtonComponent(buttons)
             .setButtonText("Copy as table")
             .onClick(() => navigator.clipboard.writeText(createMarkdownTable(tracker, settings)));
+        new ButtonComponent(buttons)
+            .setButtonText("Copy as TTL")
+            .onClick(() => navigator.clipboard.writeText(createRDFTable(tracker,settings)));
         new ButtonComponent(buttons)
             .setButtonText("Copy as CSV")
             .onClick(() => navigator.clipboard.writeText(createCsv(tracker, settings)));
@@ -186,6 +223,15 @@ function getTotalDuration(entries: Entry[]): number {
     return ret;
 }
 
+function getTodaysDuration(entries: Entry[]): number {
+    let ret = 0;
+    for (let entry of entries)
+	if (moment.unix(entry.startTime).format("MM/DD/YYYY")==moment().format("MM/DD/YYYY")) {
+            ret += getDuration(entry);
+	}
+    return ret;
+}
+
 function setCountdownValues(tracker: Tracker, current: HTMLElement, total: HTMLElement, currentDiv: HTMLDivElement) {
     let running = getRunningEntry(tracker.entries);
     if (running && !running.endTime) {
@@ -194,27 +240,28 @@ function setCountdownValues(tracker: Tracker, current: HTMLElement, total: HTMLE
     } else {
         currentDiv.hidden = true;
     }
-    total.setText(formatDuration(getTotalDuration(tracker.entries)));
+    total.setText(formatDuration(getTodaysDuration(tracker.entries)));
 }
 
 function formatTimestamp(timestamp: number, settings: SimpleTimeTrackerSettings): string {
-    return moment.unix(timestamp).format(settings.timestampFormat);
+    //    return moment.unix(timestamp).format(settings.timestampFormat);
+    return moment.unix(timestamp).format("MM/DD/YYYY HH:mm");
 }
 
 function formatDuration(totalTime: number): string {
     let duration = moment.duration(totalTime);
     let ret = "";
-	if (duration.years() > 0)
-		ret += duration.years() + "y ";
-	if (duration.months() > 0)
-		ret += duration.months() + "m ";
-	if (duration.days() > 0)
-		ret += duration.days() + "d ";
+    if (duration.years() > 0)
+	ret += duration.years() + "y ";
+    if (duration.months() > 0)
+	ret += duration.months() + "m ";
+    if (duration.days() > 0)
+	ret += duration.days() + "d ";
     if (duration.hours() > 0)
         ret += duration.hours() + "h ";
     if (duration.minutes() > 0)
         ret += duration.minutes() + "m ";
-    ret += duration.seconds() + "s";
+//    ret += duration.seconds() + "s";
     return ret;
 }
 
@@ -240,6 +287,60 @@ function createMarkdownTable(tracker: Tracker, settings: SimpleTimeTrackerSettin
     return ret;
 }
 
+
+
+function createRDFTable(tracker: Tracker, settings: SimpleTimeTrackerSettings): string {
+    let RDF = "prefix ts: <https://business.data.world/timesheet>\nprefix xsd: <http://www.w3.org/2001/XMLSchema#>\nprefix rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n";
+    for (let entry of tracker.entries)
+        RDF += createRDFSection(entry, settings);
+
+
+    let token="eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJwcm9kLXVzZXItY2xpZW50OmRhbGxlbWFuZyIsImlzcyI6ImFnZW50OmRhbGxlbWFuZzo6Zjc0YjcwY2QtMDU5NS00NTFiLTlhODktMjc5YmU1ZTNkZjFjIiwiaWF0IjoxNjU1MTU4MjI3LCJyb2xlIjpbInN1cHBvcnRfdGVhbSIsInVzZXJfYXBpX3JlYWQiLCJ1c2VyX2FwaV93cml0ZSJdLCJnZW5lcmFsLXB1cnBvc2UiOnRydWUsInNhbWwiOnsic3BhcmtsZXNxdWFkIjotMX19.lVeJLyhkkBNLYihL8w2RTmAmn3anP5R5YQc4EF7vTdRapd1reE4tEH-K1Zc5avAgTWvXaUlDp2fxzmjYzQGEog";
+    
+    var xmlHttp = new XMLHttpRequest();
+    try {
+	xmlHttp.open( "PUT", "https://api.data.world/v0/uploads/deansbookkeeping/timesheets/files/timesheet2.ttl?token="+token, false ); // false for synchronous request
+	xmlHttp.setRequestHeader("Content-Type", "application/json");
+
+	xmlHttp.setRequestHeader('Authorization', 'Bearer '+token);
+
+	xmlHttp.send( RDF );
+
+	alert ("Data sent to data.world");
+
+//	alert (JSON.parse(xmlHttp.responseText));
+    } catch (error) { alert(error);}
+
+    
+    return RDF;
+}
+
+function standardTimestamp (timestamp): string {
+    let ans=moment.unix(timestamp).format("YYYY-MM-DDThh:mm:ss");
+    return ans ;
+}
+
+
+function createRDFSection(entry: Entry, settings: SimpleTimeTrackerSettings): string {
+    let reg=/[^a-zA-Z0-9]/g
+    let iri = "<https://business.data.world/data/timesheets/TE"
+	+entry.name.replace(reg,"")
+	+formatTimestamp(entry.startTime,settings).replace(reg,"")
+	+formatTimestamp(entry.endTime,settings).replace(reg,"")
+	+">";
+    let contents= iri
+	+ " a ts:Entry ;\n"
+	+ "   rdfs:label \"" + entry.name + "\" ;\n"
+	+ "   ts:startTime \"" + standardTimestamp(entry.startTime ) +"\"^^xsd:dateTime ;\n"
+	+ "   ts:endTime \"" + standardTimestamp(entry.endTime) +"\"^^xsd:dateTime ;\n"
+	+ "   ts:duration " + getDuration(entry)/60000.0
+	+ " . \n";
+
+    return contents;
+}
+
+
+
 function createCsv(tracker: Tracker, settings: SimpleTimeTrackerSettings): string {
     let ret = "";
     for (let entry of tracker.entries) {
@@ -248,6 +349,7 @@ function createCsv(tracker: Tracker, settings: SimpleTimeTrackerSettings): strin
     }
     return ret;
 }
+
 
 function createTableSection(entry: Entry, settings: SimpleTimeTrackerSettings): string[][] {
     let ret: string[][] = [[
@@ -271,8 +373,27 @@ function addEditableTableRow(tracker: Tracker, entry: Entry, table: HTMLTableEle
     let nameBox = new TextComponent(name).setValue(entry.name);
     nameBox.inputEl.hidden = true;
 
-    row.createEl("td", { text: entry.startTime ? formatTimestamp(entry.startTime, settings) : "" });
-    row.createEl("td", { text: entry.endTime ? formatTimestamp(entry.endTime, settings) : "" });
+    //    row.createEl("td", { text: entry.startTime ? formatTimestamp(entry.startTime, settings) : "" });
+
+
+    let start = row.createEl("td");
+    let startPar = start.createEl("span", { text: entry.startTime ? moment.unix(entry.startTime).format("H:mm") : "" });
+    startPar.style.marginLeft = `${indent}em`;
+    let startBox = new TextComponent(start).setValue(entry.startTime ? formatTimestamp(entry.startTime, settings) : "" );
+    startBox.inputEl.hidden = true;
+
+    
+    //    row.createEl("td", { text: entry.endTime ? formatTimestamp(entry.endTime, settings) : "" });
+
+
+    let end = row.createEl("td");
+
+    let endPar = end.createEl("span", { text: entry.endTime ? moment.unix(entry.endTime).format("H:mm") : "" });
+    endPar.style.marginLeft = `${indent}em`;
+    let endBox = new TextComponent(end).setValue(entry.endTime ? formatTimestamp(entry.endTime, settings) : "" );
+    endBox.inputEl.hidden = true;
+
+    
     row.createEl("td", { text: entry.endTime || entry.subEntries ? formatDuration(getDuration(entry)) : "" });
 
     let entryButtons = row.createEl("td");
@@ -306,7 +427,48 @@ function addEditableTableRow(tracker: Tracker, entry: Entry, table: HTMLTableEle
                 nameBox.setValue(entry.name);
                 editButton.setIcon("lucide-check");
             }
-        });
+
+
+
+	    
+            if (startPar.hidden) {
+                startPar.hidden = false;
+                startBox.inputEl.hidden = true;
+                editButton.setIcon("lucide-pencil");
+                if (startBox.getValue()) {
+                    entry.startTime =moment.unix (Date.parse(startBox.getValue())/1000).format( "X");
+                    startPar.setText(entry.startTime ?  moment.unix(entry.startTime).format("H:mm") : "" );
+                    await saveTracker(tracker, this.app, getSectionInfo());
+                }
+            } else {
+                startPar.hidden = true;
+                startBox.inputEl.hidden = false;
+                startBox.setValue(formatTimestamp(entry.startTime,settings));
+                editButton.setIcon("lucide-check");
+            }
+
+
+            if (endPar.hidden) {
+                endPar.hidden = false;
+                endBox.inputEl.hidden = true;
+                editButton.setIcon("lucide-pencil");
+                if (endBox.getValue()) {
+                    entry.endTime =moment.unix (Date.parse(endBox.getValue())/1000).format( "X");
+                    endPar.setText(entry.endTime ?  moment.unix(entry.endTime).format("H:mm") : "" );
+                    await saveTracker(tracker, this.app, getSectionInfo());
+                }
+            } else {
+                endPar.hidden = true;
+                endBox.inputEl.hidden = false;
+                endBox.setValue(formatTimestamp(entry.endTime,settings));
+                editButton.setIcon("lucide-check");
+            }
+
+	    
+	});
+    entry.editbutton = editButton ;
+    entry.namePar = namePar ;
+    entry.nameBox = nameBox;
     new ButtonComponent(entryButtons)
         .setClass("clickable-icon")
         .setTooltip("Remove")
